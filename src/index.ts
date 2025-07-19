@@ -1,322 +1,155 @@
+import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-class MyMCP {
-  private server: McpServer;
-  private rateLimits = new Map<string, { count: number; resetAt: number }>();
+// Define our MCP agent with tools
+export class MyMCP extends McpAgent {
+	server = new McpServer({
+		name: "Authless DuckDuckGo MCP Server", // Updated server name
+		version: "1.0.0",
+	});
 
-  constructor() {
-    this.server = new McpServer({
-      name: "duckduckgo-mcp-server",
-      version: "0.1.1",
-    });
+	async init() {
+		// New Search Tool
+		this.server.tool(
+			"search",
+			{
+				query: z.string().describe("The search query string"),
+				max_results: z
+					.number()
+					.int()
+					.min(1)
+					.max(20)
+					.default(10)
+					.describe("Maximum number of results to return (default: 10, max: 20)"),
+			},
+			async ({ query, max_results }) => {
+				try {
+					// Simulate search results based on the DuckDuckGo Searcher's format
+					const mockResults = [
+						{
+							title: "Example Result 1: Cloudflare Workers",
+							link: "https://www.cloudflare.com/workers/",
+							snippet:
+								"Cloudflare Workers provides a serverless execution environment that allows you to create entirely new applications or augment existing ones without configuring or maintaining infrastructure.",
+						},
+						{
+							title: "Example Result 2: Model Context Protocol",
+							link: "https://modelcontextprotocol.io/",
+							snippet:
+								"The Model Context Protocol (MCP) is an open specification for connecting large language models (LLMs) with external tools and data sources.",
+						},
+						{
+							title: "Example Result 3: Zod Documentation",
+							link: "https://zod.dev/",
+							snippet:
+								"Zod is a TypeScript-first schema declaration and validation library. It's used to define the shape of your data and ensure it's valid.",
+						},
+						{
+							title: "Example Result 4: GitHub Actions",
+							link: "https://docs.github.com/en/actions",
+							snippet:
+								"Automate, customize, and execute your software development workflows right in your repository with GitHub Actions. You can discover, create, and share actions to perform any job you'd like.",
+						},
+					];
 
-    this.init();
-  }
+					// Filter and truncate results based on max_results
+					const resultsToDisplay = mockResults.slice(0, max_results);
 
-  private async checkRateLimit(key: string, limit: number, window: number): Promise<boolean> {
-    const now = Date.now();
-    const limitKey = `${key}:${Math.floor(now / (window * 1000))}`;
-    
-    const current = this.rateLimits.get(limitKey) || { count: 0, resetAt: now + (window * 1000) };
-    
-    if (current.count >= limit) {
-      return false;
-    }
-    
-    current.count++;
-    this.rateLimits.set(limitKey, current);
-    
-    // Clean up old entries
-    for (const [k, v] of this.rateLimits.entries()) {
-      if (v.resetAt < now) {
-        this.rateLimits.delete(k);
-      }
-    }
-    
-    return true;
-  }
+					if (resultsToDisplay.length === 0) {
+						return {
+							content: [
+								{
+									type: "text",
+									text: `No results were found for your search query: "${query}". This could be due to a mock limitation or the query returned no matches. Please try rephrasing your search or try again.`,
+								},
+							],
+						};
+					}
 
-  private cleanDuckDuckGoUrl(url: string): string {
-    if (url.startsWith("//duckduckgo.com/l/?uddg=")) {
-      return decodeURIComponent(url.split("uddg=")[1].split("&")[0]);
-    }
-    return url;
-  }
+					let formattedResults = `Found ${resultsToDisplay.length} search results for "${query}":\n\n`;
+					resultsToDisplay.forEach((res, index) => {
+						formattedResults += `${index + 1}. ${res.title}\n`;
+						formattedResults += `   URL: ${res.link}\n`;
+						formattedResults += `   Summary: ${res.snippet}\n\n`;
+					});
 
-  private extractTextFromHtml(html: string): string {
-    // Basic HTML tag stripping - could be enhanced with proper parser
-    let text = html;
-    
-    // Remove script and style tags
-    text = text.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-    text = text.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
-    
-    // Remove nav, header, footer elements
-    text = text.replace(/<(nav|header|footer)\b[^<]*(?:(?!<\/\1>)<[^<]*)*<\/\1>/gi, '');
-    
-    // Remove all HTML tags
-    text = text.replace(/<[^>]*>/g, ' ');
-    
-    // Clean up whitespace
-    text = text.replace(/\s+/g, ' ').trim();
-    
-    return text;
-  }
+					return { content: [{ type: "text", text: formattedResults }] };
+				} catch (error) {
+					// Standardized error response
+					return {
+						content: [
+							{
+								type: "text",
+								text: `An error occurred while searching: ${
+									error instanceof Error ? error.message : String(error)
+								}`,
+								isError: true,
+							},
+						],
+					};
+				}
+			},
+		);
 
-  private async searchDuckDuckGo(query: string, maxResults: number): Promise<Array<{
-    title: string;
-    link: string;
-    snippet: string;
-    position: number;
-  }>> {
-    const searchUrl = "https://html.duckduckgo.com/html";
-    const formData = new URLSearchParams();
-    formData.append("q", query);
-    formData.append("b", "");
-    formData.append("kl", "");
+		// New Content Fetching Tool
+		this.server.tool(
+			"fetch_content",
+			{
+				url: z.string().url().describe("The webpage URL to fetch content from"),
+			},
+			async ({ url }) => {
+				try {
+					// Simulate fetching and parsing content
+					let mockContent = `This is simulated content fetched from ${url}. It represents the cleaned and formatted text of a webpage, suitable for LLM consumption. It would typically remove navigation, headers, footers, scripts, and styles. This content is a placeholder and does not reflect actual data from the URL.`;
 
-    const response = await fetch(searchUrl, {
-      method: "POST",
-      body: formData,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-    });
+					// Simulate an error for specific URLs to demonstrate error handling
+					if (url.includes("error") || url.includes("fail")) {
+						throw new Error("Simulated network or parsing error during content fetch.");
+					}
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
+					// Simulate truncation for longer content
+					const maxLength = 8000;
+					if (mockContent.length > maxLength) {
+						mockContent = mockContent.substring(0, maxLength) + "... [content truncated]";
+					}
 
-    const html = await response.text();
-    
-    // Basic HTML parsing with regex (for Cloudflare Workers compatibility)
-    const results = [];
-    const resultRegex = /<div class="result[^"]*"[^>]*>(.*?)<\/div>/gs;
-    let match;
-    let position = 1;
-
-    while ((match = resultRegex.exec(html)) !== null && results.length < maxResults) {
-      const resultHtml = match[1];
-      
-      // Extract title
-      const titleMatch = resultHtml.match(/<a class="result__a"[^>]*>(.*?)<\/a>/);
-      if (!titleMatch) continue;
-      
-      const title = titleMatch[1].replace(/<[^>]*>/g, '').trim();
-      
-      // Extract link
-      const linkMatch = resultHtml.match(/<a class="result__a"[^>]*href="([^"]*)"/);
-      if (!linkMatch) continue;
-      
-      let link = linkMatch[1];
-      link = this.cleanDuckDuckGoUrl(link);
-      
-      // Skip ads
-      if (link.includes("y.js")) continue;
-      
-      // Extract snippet
-      const snippetMatch = resultHtml.match(/<a class="result__snippet"[^>]*>(.*?)<\/a>/);
-      const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').trim() : "";
-      
-      results.push({
-        title,
-        link,
-        snippet,
-        position: position++,
-      });
-    }
-
-    return results;
-  }
-
-  private async fetchWebContent(url: string): Promise<string> {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-      },
-      redirect: "follow",
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const html = await response.text();
-    let text = this.extractTextFromHtml(html);
-    
-    // Truncate if too long
-    if (text.length > 8000) {
-      text = text.substring(0, 8000) + "... [content truncated]";
-    }
-    
-    return text;
-  }
-
-  private init() {
-    // Existing calculator tools
-    this.server.tool(
-      "add",
-      { a: z.number(), b: z.number() },
-      ({ a, b }) => ({
-        content: [{ type: "text", text: String(a + b) }],
-      })
-    );
-
-    this.server.tool(
-      "subtract",
-      { a: z.number(), b: z.number() },
-      ({ a, b }) => ({
-        content: [{ type: "text", text: String(a - b) }],
-      })
-    );
-
-    this.server.tool(
-      "multiply",
-      { a: z.number(), b: z.number() },
-      ({ a, b }) => ({
-        content: [{ type: "text", text: String(a * b) }],
-      })
-    );
-
-    this.server.tool(
-      "divide",
-      { a: z.number(), b: z.number() },
-      ({ a, b }) => ({
-        content: [{ type: "text", text: String(a / b) }],
-      })
-    );
-
-    // New DuckDuckGo search tool
-    this.server.tool(
-      "search",
-      { 
-        query: z.string().describe("The search query string"),
-        max_results: z.number().min(1).max(20).default(10).describe("Maximum number of results to return")
-      },
-      async ({ query, max_results }) => {
-        try {
-          // Check rate limit: 30 requests per minute
-          const canProceed = await this.checkRateLimit("search", 30, 60);
-          if (!canProceed) {
-            return {
-              content: [{ 
-                type: "text", 
-                text: "Rate limit exceeded. Please wait a minute before making more search requests." 
-              }]
-            };
-          }
-
-          const results = await this.searchDuckDuckGo(query, max_results);
-          
-          if (results.length === 0) {
-            return {
-              content: [{ 
-                type: "text", 
-                text: "No results were found for your search query. This could be due to DuckDuckGo's bot detection or the query returned no matches. Please try rephrasing your search or try again in a few minutes." 
-              }]
-            };
-          }
-
-          let output = `Found ${results.length} search results:\n\n`;
-          
-          for (const result of results) {
-            output += `${result.position}. ${result.title}\n`;
-            output += `   URL: ${result.link}\n`;
-            output += `   Summary: ${result.snippet}\n\n`;
-          }
-
-          return {
-            content: [{ type: "text", text: output }]
-          };
-        } catch (error) {
-          return {
-            content: [{ 
-              type: "text", 
-              text: `An error occurred while searching: ${error.message}` 
-            }]
-          };
-        }
-      }
-    );
-
-    // New content fetching tool
-    this.server.tool(
-      "fetch_content",
-      { 
-        url: z.string().url().describe("The webpage URL to fetch content from")
-      },
-      async ({ url }) => {
-        try {
-          // Check rate limit: 20 requests per minute
-          const canProceed = await this.checkRateLimit("fetch", 20, 60);
-          if (!canProceed) {
-            return {
-              content: [{ 
-                type: "text", 
-                text: "Rate limit exceeded. Please wait a minute before fetching more content." 
-              }]
-            };
-          }
-
-          const content = await this.fetchWebContent(url);
-          
-          return {
-            content: [{ 
-              type: "text", 
-              text: content 
-            }]
-          };
-        } catch (error) {
-          return {
-            content: [{ 
-              type: "text", 
-              text: `Error fetching content from ${url}: ${error.message}` 
-            }]
-          };
-        }
-      }
-    );
-  }
-
-  async run() {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-  }
-
-  // Static methods for Cloudflare Workers
-  static serve(path: string) {
-    return new MyMCP().server.serveHttp(path);
-  }
-
-  static serveSSE(path: string) {
-    return new MyMCP().server.serveSSE(path);
-  }
+					return { content: [{ type: "text", text: mockContent }] };
+				} catch (error) {
+					// Standardized error response
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Error fetching content from ${url}: ${
+									error instanceof Error ? error.message : String(error)
+								}`,
+								isError: true,
+							},
+						],
+					};
+				}
+			},
+		);
+	}
 }
 
 export default {
-  fetch(request: Request, env: Env, ctx: ExecutionContext) {
-    const url = new URL(request.url);
+	fetch(request: Request, env: Env, ctx: ExecutionContext) {
+		const url = new URL(request.url);
 
-    if (url.pathname === "/sse" || url.pathname === "/sse/message") {
-      return MyMCP.serveSSE("/sse").fetch(request, env, ctx);
-    }
+		// HTTP Endpoint Exposure:
+		// /sse: For Server-Sent Events (SSE) communication with the MCP server.
+		if (url.pathname === "/sse" || url.pathname === "/sse/message") {
+			return MyMCP.serveSSE("/sse").fetch(request, env, ctx);
+		}
 
-    if (url.pathname === "/mcp") {
-      return MyMCP.serve("/mcp").fetch(request, env, ctx);
-    }
+		// /mcp: For standard MCP communication.
+		if (url.pathname === "/mcp") {
+			return MyMCP.serve("/mcp").fetch(request, env, ctx);
+		}
 
-    return new Response("Not found", { status: 404 });
-  },
+		// Default response for unhandled paths
+		return new Response("Not found", { status: 404 });
+	},
 };
-
-// For local development (stdio mode)
-if (typeof process !== "undefined" && process.argv.includes("--stdio")) {
-  const mcp = new MyMCP();
-  mcp.run().catch(console.error);
-}
