@@ -245,21 +245,38 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "search",
             {
-                tool_name: "search",
                 description: "Performs a real search query on DuckDuckGo and returns actual results.",
-                parameters_zod_schema: {
-                    query: z.string().describe("The search query string"),
-                    max_results: z
-                        .number()
-                        .int()
-                        .min(1)
-                        .max(20)
-                        .default(10)
-                        .describe("Maximum number of results to return (default: 10, max: 20)"),
-                },
-                logic_description: "Searches DuckDuckGo using their HTML interface and parses real search results using CSS selectors.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        query: {
+                            type: "string",
+                            description: "The search query string"
+                        },
+                        max_results: {
+                            type: "number",
+                            description: "Maximum number of results to return (default: 10, max: 20)",
+                            minimum: 1,
+                            maximum: 20,
+                            default: 10
+                        }
+                    },
+                    required: ["query"]
+                }
             },
-            async ({ query, max_results }) => {
+            async (args) => {
+                const { query, max_results = 10 } = args;
+                
+                if (!query || typeof query !== 'string') {
+                    return {
+                        content: [{
+                            type: "text",
+                            text: "Error: Query parameter is required and must be a string",
+                            isError: true
+                        }]
+                    };
+                }
+                
                 try {
                     const results = await this.searcher.search(query, max_results);
                     const formattedResults = this.searcher.formatResultsForLLM(results);
@@ -287,14 +304,32 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "fetch_content",
             {
-                tool_name: "fetch_content",
                 description: "Fetches and parses real content from a specified webpage URL using robust HTML parsing.",
-                parameters_zod_schema: {
-                    url: z.string().url().describe("The webpage URL to fetch content from"),
-                },
-                logic_description: "Fetches the actual webpage, removes navigation/scripts/styles using CSS selectors, and returns cleaned text content.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        url: {
+                            type: "string",
+                            description: "The webpage URL to fetch content from",
+                            format: "uri"
+                        }
+                    },
+                    required: ["url"]
+                }
             },
-            async ({ url }) => {
+            async (args) => {
+                const { url } = args;
+                
+                if (!url || typeof url !== 'string') {
+                    return {
+                        content: [{
+                            type: "text",
+                            text: "Error: URL parameter is required and must be a string",
+                            isError: true
+                        }]
+                    };
+                }
+                
                 try {
                     const content = await this.fetcher.fetchAndParse(url);
                     
