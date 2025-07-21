@@ -245,45 +245,23 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "search",
             {
+                tool_name: "search",
                 description: "Performs a real search query on DuckDuckGo and returns actual results.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        query: {
-                            type: "string",
-                            description: "The search query string"
-                        },
-                        max_results: {
-                            type: "number",
-                            description: "Maximum number of results to return (default: 10, max: 20)",
-                            minimum: 1,
-                            maximum: 20,
-                            default: 10
-                        }
-                    },
-                    required: ["query"]
-                }
+                parameters_zod_schema: {
+                    query: z.string().describe("The search query string"),
+                    max_results: z
+                        .number()
+                        .int()
+                        .min(1)
+                        .max(20)
+                        .default(10)
+                        .describe("Maximum number of results to return (default: 10, max: 20)"),
+                },
+                logic_description: "Searches DuckDuckGo using their HTML interface and parses real search results using CSS selectors.",
             },
-            async (args) => {
-                const { query, max_results = 10 } = args;
-                
-                // Handle both direct args and nested args structure
-                const actualQuery = args.query || args.arguments?.query || (typeof args === 'string' ? args : '');
-                const actualMaxResults = args.max_results || args.arguments?.max_results || max_results;
-                
-                if (!actualQuery || typeof actualQuery !== 'string' || actualQuery.trim() === '') {
-                    return {
-                        content: [{
-                            type: "text",
-                            text: `Error: Query parameter is required and must be a non-empty string. Received: ${JSON.stringify(args)}`,
-                            isError: true
-                        }]
-                    };
-                }
-                
+            async ({ query, max_results }) => {
                 try {
-                    console.log(`Processing search request with query: "${actualQuery}" and max_results: ${actualMaxResults}`);
-                    const results = await this.searcher.search(actualQuery, actualMaxResults);
+                    const results = await this.searcher.search(query, max_results);
                     const formattedResults = this.searcher.formatResultsForLLM(results);
                     
                     return {
@@ -309,36 +287,16 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "fetch_content",
             {
+                tool_name: "fetch_content",
                 description: "Fetches and parses real content from a specified webpage URL using robust HTML parsing.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        url: {
-                            type: "string",
-                            description: "The webpage URL to fetch content from",
-                            format: "uri"
-                        }
-                    },
-                    required: ["url"]
-                }
+                parameters_zod_schema: {
+                    url: z.string().url().describe("The webpage URL to fetch content from"),
+                },
+                logic_description: "Fetches the actual webpage, removes navigation/scripts/styles using CSS selectors, and returns cleaned text content.",
             },
-            async (args) => {
-                // Handle both direct args and nested args structure
-                const actualUrl = args.url || args.arguments?.url || '';
-                
-                if (!actualUrl || typeof actualUrl !== 'string' || actualUrl.trim() === '') {
-                    return {
-                        content: [{
-                            type: "text",
-                            text: `Error: URL parameter is required and must be a non-empty string. Received: ${JSON.stringify(args)}`,
-                            isError: true
-                        }]
-                    };
-                }
-                
+            async ({ url }) => {
                 try {
-                    console.log(`Processing fetch content request for URL: "${actualUrl}"`);
-                    const content = await this.fetcher.fetchAndParse(actualUrl);
+                    const content = await this.fetcher.fetchAndParse(url);
                     
                     return {
                         content: [{
@@ -351,7 +309,7 @@ export class MyMCP extends McpAgent {
                     return {
                         content: [{
                             type: "text",
-                            text: `Error fetching content from ${actualUrl}: ${error instanceof Error ? error.message : String(error)}`,
+                            text: `Error fetching content from ${url}: ${error instanceof Error ? error.message : String(error)}`,
                             isError: true
                         }]
                     };
