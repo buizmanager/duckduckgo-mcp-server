@@ -267,18 +267,23 @@ export class MyMCP extends McpAgent {
             async (args) => {
                 const { query, max_results = 10 } = args;
                 
-                if (!query || typeof query !== 'string') {
+                // Handle both direct args and nested args structure
+                const actualQuery = args.query || args.arguments?.query || (typeof args === 'string' ? args : '');
+                const actualMaxResults = args.max_results || args.arguments?.max_results || max_results;
+                
+                if (!actualQuery || typeof actualQuery !== 'string' || actualQuery.trim() === '') {
                     return {
                         content: [{
                             type: "text",
-                            text: "Error: Query parameter is required and must be a string",
+                            text: `Error: Query parameter is required and must be a non-empty string. Received: ${JSON.stringify(args)}`,
                             isError: true
                         }]
                     };
                 }
                 
                 try {
-                    const results = await this.searcher.search(query, max_results);
+                    console.log(`Processing search request with query: "${actualQuery}" and max_results: ${actualMaxResults}`);
+                    const results = await this.searcher.search(actualQuery, actualMaxResults);
                     const formattedResults = this.searcher.formatResultsForLLM(results);
                     
                     return {
@@ -318,20 +323,22 @@ export class MyMCP extends McpAgent {
                 }
             },
             async (args) => {
-                const { url } = args;
+                // Handle both direct args and nested args structure
+                const actualUrl = args.url || args.arguments?.url || '';
                 
-                if (!url || typeof url !== 'string') {
+                if (!actualUrl || typeof actualUrl !== 'string' || actualUrl.trim() === '') {
                     return {
                         content: [{
                             type: "text",
-                            text: "Error: URL parameter is required and must be a string",
+                            text: `Error: URL parameter is required and must be a non-empty string. Received: ${JSON.stringify(args)}`,
                             isError: true
                         }]
                     };
                 }
                 
                 try {
-                    const content = await this.fetcher.fetchAndParse(url);
+                    console.log(`Processing fetch content request for URL: "${actualUrl}"`);
+                    const content = await this.fetcher.fetchAndParse(actualUrl);
                     
                     return {
                         content: [{
@@ -344,7 +351,7 @@ export class MyMCP extends McpAgent {
                     return {
                         content: [{
                             type: "text",
-                            text: `Error fetching content from ${url}: ${error instanceof Error ? error.message : String(error)}`,
+                            text: `Error fetching content from ${actualUrl}: ${error instanceof Error ? error.message : String(error)}`,
                             isError: true
                         }]
                     };
