@@ -1,6 +1,7 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import * as cheerio from "cheerio";
 
 interface SearchResult {
     title: string;
@@ -65,6 +66,8 @@ class DuckDuckGoSearcher {
             // Apply rate limiting
             await this.rateLimiter.acquire();
 
+            console.log(`Searching DuckDuckGo for: ${query}`);
+
             // Create form data for POST request
             const formData = new URLSearchParams({
                 q: query,
@@ -86,9 +89,16 @@ class DuckDuckGoSearcher {
             }
 
             const html = await response.text();
-            return this.parseSearchResults(html, maxResults);
+            const results = this.parseSearchResults(html, maxResults);
+            
+            console.log(`Successfully found ${results.length} results`);
+            return results;
 
         } catch (error) {
+            if (error instanceof TypeError && error.message.includes("fetch")) {
+                console.error("Search request timed out");
+                return [];
+            }
             console.error(`Search error: ${error}`);
             return [];
         }
@@ -97,57 +107,55 @@ class DuckDuckGoSearcher {
     private parseSearchResults(html: string, maxResults: number): SearchResult[] {
         const results: SearchResult[] = [];
         
-        // Simple HTML parsing without external dependencies
-        // Look for result blocks using regex patterns
-        const resultPattern = /<div[^>]*class="[^"]*result[^"]*"[^>]*>(.*?)<\/div>/gs;
-        const titlePattern = /<a[^>]*class="[^"]*result__title[^"]*"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/s;
-        const snippetPattern = /<div[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)<\/div>/s;
-
-        let match;
-        let position = 1;
-
-        while ((match = resultPattern.exec(html)) !== null && results.length < maxResults) {
-            const resultHtml = match[1];
+        try {
+            // Use cheerio for robust HTML parsing (like BeautifulSoup)
+            const $ = cheerio.load(html);
             
-            const titleMatch = titlePattern.exec(resultHtml);
-            if (!titleMatch) continue;
-
-            let link = titleMatch[1];
-            const titleHtml = titleMatch[2];
-            
-            // Skip ad results
-            if (link.includes("y.js")) continue;
-
-            // Clean up DuckDuckGo redirect URLs
-            if (link.startsWith("//duckduckgo.com/l/?uddg=")) {
-                try {
-                    link = decodeURIComponent(link.split("uddg=")[1].split("&")[0]);
-                } catch (e) {
-                    continue;
+            // Find all result elements using CSS selectors (matching server.py approach)
+            $('.result').each((index, element) => {
+                if (results.length >= maxResults) return false; // Break the loop
+                
+                const $result = $(element);
+                
+                // Find title and link using CSS selectors
+                const $titleLink = $result.find('.result__title a').first();
+                if ($titleLink.length === 0) return; // Continue to next result
+                
+                const title = $titleLink.text().trim();
+                let link = $titleLink.attr('href') || '';
+                
+                if (!title || !link) return; // Continue to next result
+                
+                // Skip ad results
+                if (link.includes('y.js')) return;
+                
+                // Clean up DuckDuckGo redirect URLs (matching server.py logic)
+                if (link.startsWith('//duckduckgo.com/l/?uddg=')) {
+                    try {
+                        const encodedUrl = link.split('uddg=')[1].split('&')[0];
+                        link = decodeURIComponent(encodedUrl);
+                    } catch (e) {
+                        return; // Skip this result if URL decoding fails
+                    }
                 }
-            }
-
-            // Extract title text (remove HTML tags)
-            const title = this.stripHtmlTags(titleHtml).trim();
-            if (!title) continue;
-
-            // Extract snippet
-            const snippetMatch = snippetPattern.exec(resultHtml);
-            const snippet = snippetMatch ? this.stripHtmlTags(snippetMatch[1]).trim() : "";
-
-            results.push({
-                title,
-                link,
-                snippet,
-                position: position++
+                
+                // Find snippet using CSS selector
+                const $snippet = $result.find('.result__snippet').first();
+                const snippet = $snippet.text().trim();
+                
+                results.push({
+                    title,
+                    link,
+                    snippet,
+                    position: results.length + 1
+                });
             });
+            
+        } catch (error) {
+            console.error(`Error parsing search results: ${error}`);
         }
-
+        
         return results;
-    }
-
-    private stripHtmlTags(html: string): string {
-        return html.replace(/<[^>]*>/g, "").replace(/&[^;]+;/g, " ").replace(/\s+/g, " ");
     }
 }
 
@@ -157,6 +165,8 @@ class WebContentFetcher {
     async fetchAndParse(url: string): Promise<string> {
         try {
             await this.rateLimiter.acquire();
+
+            console.log(`Fetching content from: ${url}`);
 
             const response = await fetch(url, {
                 headers: {
@@ -170,44 +180,53 @@ class WebContentFetcher {
             }
 
             const html = await response.text();
-            return this.parseContent(html);
+            const content = this.parseContent(html);
+            
+            console.log(`Successfully fetched and parsed content (${content.length} characters)`);
+            return content;
 
         } catch (error) {
             if (error instanceof TypeError && error.message.includes("fetch")) {
+                console.error(`Request timed out for URL: ${url}`);
                 return "Error: The request timed out while trying to fetch the webpage.";
             }
+            console.error(`Error fetching content from ${url}: ${error}`);
             return `Error: Could not access the webpage (${error instanceof Error ? error.message : String(error)})`;
         }
     }
 
     private parseContent(html: string): string {
-        // Remove script, style, nav, header, footer elements
-        let cleanHtml = html.replace(/<(script|style|nav|header|footer)[^>]*>.*?<\/\1>/gis, "");
-        
-        // Remove all HTML tags
-        let text = cleanHtml.replace(/<[^>]*>/g, " ");
-        
-        // Decode HTML entities
-        text = text.replace(/&nbsp;/g, " ")
-                  .replace(/&amp;/g, "&")
-                  .replace(/&lt;/g, "<")
-                  .replace(/&gt;/g, ">")
-                  .replace(/&quot;/g, '"')
-                  .replace(/&#39;/g, "'");
-
-        // Clean up whitespace
-        const lines = text.split("\n").map(line => line.trim()).filter(line => line);
-        text = lines.join(" ");
-        
-        // Remove extra whitespace
-        text = text.replace(/\s+/g, " ").trim();
-
-        // Truncate if too long
-        if (text.length > 8000) {
-            text = text.substring(0, 8000) + "... [content truncated]";
+        try {
+            // Use cheerio for robust HTML parsing (matching server.py with BeautifulSoup)
+            const $ = cheerio.load(html);
+            
+            // Remove script, style, nav, header, footer elements (matching server.py)
+            $('script, style, nav, header, footer').remove();
+            
+            // Get the text content (equivalent to BeautifulSoup's get_text())
+            let text = $.text();
+            
+            // Clean up the text (matching server.py logic)
+            const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+            const chunks = lines.flatMap(line => 
+                line.split('  ').map(phrase => phrase.trim()).filter(phrase => phrase)
+            );
+            text = chunks.join(' ');
+            
+            // Remove extra whitespace (matching server.py regex)
+            text = text.replace(/\s+/g, ' ').trim();
+            
+            // Truncate if too long (matching server.py)
+            if (text.length > 8000) {
+                text = text.substring(0, 8000) + '... [content truncated]';
+            }
+            
+            return text || "No readable content found on this webpage.";
+            
+        } catch (error) {
+            console.error(`Error parsing HTML content: ${error}`);
+            return "Error: Failed to parse webpage content.";
         }
-
-        return text || "No readable content found on this webpage.";
     }
 }
 
@@ -238,7 +257,7 @@ export class MyMCP extends McpAgent {
                         .default(10)
                         .describe("Maximum number of results to return (default: 10, max: 20)"),
                 },
-                logic_description: "Searches DuckDuckGo using their HTML interface and parses real search results.",
+                logic_description: "Searches DuckDuckGo using their HTML interface and parses real search results using CSS selectors.",
             },
             async ({ query, max_results }) => {
                 try {
@@ -252,6 +271,7 @@ export class MyMCP extends McpAgent {
                         }]
                     };
                 } catch (error) {
+                    console.error(`Search tool error: ${error}`);
                     return {
                         content: [{
                             type: "text",
@@ -268,11 +288,11 @@ export class MyMCP extends McpAgent {
             "fetch_content",
             {
                 tool_name: "fetch_content",
-                description: "Fetches and parses real content from a specified webpage URL.",
+                description: "Fetches and parses real content from a specified webpage URL using robust HTML parsing.",
                 parameters_zod_schema: {
                     url: z.string().url().describe("The webpage URL to fetch content from"),
                 },
-                logic_description: "Fetches the actual webpage, removes navigation/scripts/styles, and returns cleaned text content.",
+                logic_description: "Fetches the actual webpage, removes navigation/scripts/styles using CSS selectors, and returns cleaned text content.",
             },
             async ({ url }) => {
                 try {
@@ -285,6 +305,7 @@ export class MyMCP extends McpAgent {
                         }]
                     };
                 } catch (error) {
+                    console.error(`Fetch content tool error: ${error}`);
                     return {
                         content: [{
                             type: "text",
